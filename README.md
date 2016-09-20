@@ -76,7 +76,7 @@ Besides the two parameters, other optional parameters include:
 * `-neigh`: Number of neighbors (K) in K-NNG, which is usually set as three times of perplexity. Default is 150.
 * `-gamma`: The weights assigned to negative edges. Default is 7.
 * `-perp`: The perplexity used for deciding edge weights in K-NNG. Default is 50.
-* `-to_log`: specify whether to pre-process similarities with logarithmization (1) or not (0). Default is 0.
+* `-log`: specify whether to pre-process similarities with logarithmization (1) or not (0). Default is 0.
 *
 ##Examples
 We provide some examples including MNIST(high-dimensional feature vectors) and CondMat(networks) in the ```Examples/``` folder.
