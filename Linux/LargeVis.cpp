@@ -1,20 +1,5 @@
-#include "stdafx.h"
 #include "LargeVis.h"
-#include <math.h>
 #include <map>
-
-boost::minstd_rand LargeVis::generator(42u);
-boost::uniform_real<> LargeVis::uni_dist(0, 1);
-boost::variate_generator<boost::minstd_rand&, boost::uniform_real<> > LargeVis::uni(generator, uni_dist);
-
-namespace boost
-{
-#ifdef BOOST_NO_EXCEPTIONS
-	void throw_exception(std::exception const & e){
-		throw 11; // or whatever
-	};
-#endif
-}
 
 LargeVis::LargeVis()
 {
@@ -24,6 +9,9 @@ LargeVis::LargeVis()
 	head = alias = NULL;
     neg_table = NULL;
 }
+
+const gsl_rng_type *LargeVis::gsl_T = NULL;
+gsl_rng *LargeVis::gsl_r = NULL;
 
 void LargeVis::clean_model()
 {
@@ -54,7 +42,7 @@ void LargeVis::clean_graph()
 
 void LargeVis::clean_data()
 {
-	if (vec) {delete[] vec; vec = NULL;	}
+	if (vec) { delete[] vec; vec = NULL; }
 	clean_graph();
 }
 
@@ -107,7 +95,7 @@ void LargeVis::load_from_graph(char *infile)
 		return;
 	}
 	printf("Reading input file %s ......%c", infile, 13);
-	real maximalLogWeight = 0;
+	real maximalLogWeight = 0;//added by sonja
 	while (fscanf(fin, "%s%s%f", w1, w2, &weight) == 3)
 	{
 		if (!dict.count(w1)) { dict[w1] = n_vertices++; names.push_back(w1); }
@@ -118,7 +106,7 @@ void LargeVis::load_from_graph(char *infile)
 		edge_to.push_back(y);
 		if (to_logarithmize == 1) {//added by Sonja
 			weight = -log2(weight);//turning into a distance with logarithmization
-			maximalLogWeight = max(weight, maximalLogWeight);//computing the max for later normalization
+			maximalLogWeight = max(weight, maximalLogWeight);//computing the max for later normalization			
 		}
 		edge_weight.push_back(weight);
 		next.push_back(-1);
@@ -132,6 +120,7 @@ void LargeVis::load_from_graph(char *infile)
 	fclose(fin);
 	delete[] w1;
 	delete[] w2;
+
 	head = new long long[n_vertices];
 	for (i = 0; i < n_vertices; ++i) head[i] = -1;
 	for (p = 0; p < n_edge; ++p)
@@ -152,7 +141,7 @@ void LargeVis::save(char *outfile)
 	fprintf(fout, "%lld %lld\n", n_vertices, out_dim);
 	for (long long i = 0; i < n_vertices; ++i)
 	{
-		if(names.size()) fprintf(fout, "%s ", names[i].c_str());
+		if (names.size()) fprintf(fout, "%s ", names[i].c_str());
 		for (long long j = 0; j < out_dim; ++j)
 		{
 			if (j) fprintf(fout, " ");
@@ -261,24 +250,9 @@ void LargeVis::init_alias_table()
 
 long long LargeVis::sample_an_edge(real rand_value1, real rand_value2)
 {
-	long long k = (long long)(n_edge * rand_value1) - 1;
-	k = max(k, 0);
+	long long k = (long long)((n_edge - 0.1) * rand_value1);
 	return rand_value2 <= prob[k] ? k : alias[k];
 }
-
-//long long LargeVis::sample_an_edge(double rand_value1, double rand_value2) {
-//	real rv1 = rand_value1;
-//	real rv2 = rand_value2;
-//
-//	if (rv1 > rand_value1)
-//		rv1 = std::nextafter(rv1, -std::numeric_limits<real>::infinity());
-//
-//	if (rv2 > rand_value2)
-//		rv2 = std::nextafter(rv2, -std::numeric_limits<real>::infinity());
-//
-//	long long k = (long long)(n_edge * rv1);
-//	return rv2 < prob[k] ? k : alias[k];
-//}
 
 void LargeVis::annoy_thread(int id)
 {
@@ -289,7 +263,8 @@ void LargeVis::annoy_thread(int id)
 	{
 		cur_annoy_index = new AnnoyIndex<int, real, Euclidean, Kiss64Random>(n_dim);
 		cur_annoy_index->load("annoy_index_file");
-	}else
+	}
+	else
 		cur_annoy_index = annoy_index;
 	for (long long i = lo; i < hi; ++i)
 	{
@@ -304,6 +279,13 @@ void LargeVis::annoy_thread(int id)
 	if (id > 0) delete cur_annoy_index;
 }
 
+void *LargeVis::annoy_thread_caller(void *arg)
+{
+	LargeVis *ptr = (LargeVis*)(((arg_struct*)arg)->ptr);
+	ptr->annoy_thread(((arg_struct*)arg)->id);
+	pthread_exit(NULL);
+}
+
 void LargeVis::run_annoy()
 {
     printf("Running ANNOY ......"); fflush(stdout);
@@ -311,14 +293,12 @@ void LargeVis::run_annoy()
 	for (long long i = 0; i < n_vertices; ++i)
 		annoy_index->add_item(i, &vec[i * n_dim]);
 	annoy_index->build(n_trees);
-	if(n_threads > 1) annoy_index->save("annoy_index_file");
+	if (n_threads > 1) annoy_index->save("annoy_index_file");
 	knn_vec = new std::vector<int>[n_vertices];
 
-	boost::thread *pt = new boost::thread[n_threads];
-	for (int i = 0; i < n_threads; ++i)
-		pt[i] = boost::thread(&LargeVis::annoy_thread, this, i);
-	for (int i = 0; i < n_threads; ++i)
-		pt[i].join();
+	pthread_t *pt = new pthread_t[n_threads];
+	for (int j = 0; j < n_threads; ++j) pthread_create(&pt[j], NULL, LargeVis::annoy_thread_caller, new arg_struct(this, j));
+	for (int j = 0; j < n_threads; ++j) pthread_join(pt[j], NULL);
 	delete[] pt;
     delete annoy_index; annoy_index = NULL;
 	printf(" Done.\n");
@@ -364,6 +344,13 @@ void LargeVis::propagation_thread(int id)
 	delete[] check;
 }
 
+void *LargeVis::propagation_thread_caller(void *arg)
+{
+	LargeVis *ptr = (LargeVis*)(((arg_struct*)arg)->ptr);
+	ptr->propagation_thread(((arg_struct*)arg)->id);
+	pthread_exit(NULL);
+}
+
 void LargeVis::run_propagation()
 {
 	for (int i = 0; i < n_propagations; ++i)
@@ -372,11 +359,12 @@ void LargeVis::run_propagation()
 		fflush(stdout);
 		old_knn_vec = knn_vec;
 		knn_vec = new std::vector<int>[n_vertices];
-		boost::thread *pt = new boost::thread[n_threads];
-		for (int j = 0; j < n_threads; ++j) pt[j] = boost::thread(&LargeVis::propagation_thread, this, j);
-		for (int j = 0; j < n_threads; ++j) pt[j].join();
+		pthread_t *pt = new pthread_t[n_threads];
+		for (int j = 0; j < n_threads; ++j) pthread_create(&pt[j], NULL, LargeVis::propagation_thread_caller, new arg_struct(this, j));
+		for (int j = 0; j < n_threads; ++j) pthread_join(pt[j], NULL);
 		delete[] pt;
-		delete[] old_knn_vec; old_knn_vec = NULL;
+		delete[] old_knn_vec;
+		old_knn_vec = NULL;
 	}
 	printf("\n");
 }
@@ -422,6 +410,13 @@ void LargeVis::compute_similarity_thread(int id)
 	}
 }
 
+void *LargeVis::compute_similarity_thread_caller(void *arg)
+{
+	LargeVis *ptr = (LargeVis*)(((arg_struct*)arg)->ptr);
+	ptr->compute_similarity_thread(((arg_struct*)arg)->id);
+	pthread_exit(NULL);
+}
+
 void LargeVis::search_reverse_thread(int id)
 {
 	long long lo = id * n_vertices / n_threads;
@@ -439,6 +434,13 @@ void LargeVis::search_reverse_thread(int id)
 			reverse[p] = q;
 		}
 	}
+}
+
+void *LargeVis::search_reverse_thread_caller(void *arg)
+{
+	LargeVis *ptr = (LargeVis*)(((arg_struct*)arg)->ptr);
+	ptr->search_reverse_thread(((arg_struct*)arg)->id);
+	pthread_exit(NULL);
 }
 
 void LargeVis::compute_similarity()
@@ -463,16 +465,16 @@ void LargeVis::compute_similarity()
 	}
     delete[] vec; vec = NULL;
     delete[] knn_vec; knn_vec = NULL;
-	boost::thread *pt = new boost::thread[n_threads];
-	for (int j = 0; j < n_threads; ++j) pt[j] = boost::thread(&LargeVis::compute_similarity_thread, this, j);
-	for (int j = 0; j < n_threads; ++j) pt[j].join();
+	pthread_t *pt = new pthread_t[n_threads];
+	for (int j = 0; j < n_threads; ++j) pthread_create(&pt[j], NULL, LargeVis::compute_similarity_thread_caller, new arg_struct(this, j));
+	for (int j = 0; j < n_threads; ++j) pthread_join(pt[j], NULL);
 	delete[] pt;
 
-	pt = new boost::thread[n_threads];
-	for (int j = 0; j < n_threads; ++j) pt[j] = boost::thread(&LargeVis::search_reverse_thread, this, j);
-	for (int j = 0; j < n_threads; ++j) pt[j].join();
+	pt = new pthread_t[n_threads];
+	for (int j = 0; j < n_threads; ++j) pthread_create(&pt[j], NULL, LargeVis::search_reverse_thread_caller, new arg_struct(this, j));
+	for (int j = 0; j < n_threads; ++j) pthread_join(pt[j], NULL);
 	delete[] pt;
-	
+
 	for (x = 0; x < n_vertices; ++x)
 	{
 		for (p = head[x]; p >= 0; p = next[p])
@@ -504,7 +506,7 @@ void LargeVis::test_accuracy()
 	long long hit_case = 0, i, j, x, y;
 	for (i = 0; i < test_case; ++i)
 	{
-		x = floor(uni() * (n_vertices - 0.1));
+		x = floor(gsl_rng_uniform(gsl_r) * (n_vertices - 0.1));
 		for (y = 0; y < n_vertices; ++y) if (x != y)
 		{
 			heap->push(std::make_pair(CalcDist(x, y), y));
@@ -530,17 +532,21 @@ void LargeVis::construt_knn()
 	test_accuracy();
 	compute_similarity();
 
-	FILE *fout = fopen("knn_graph.txt", "wb");
+	/*FILE *fout = fopen("knn_graph.txt", "wb");
 	for (long long p = 0; p < n_edge; ++p)
 	{
-		fprintf(fout, "%lld %lld %.6f\n", edge_from[p], edge_to[p], edge_weight[p]);
+		fprintf(fout, "%lld %lld ", edge_from[p], edge_to[p]);
+		double tmp = edge_weight[p];
+		fwrite(&tmp, sizeof(double), 1, fout);
+		fprintf(fout, "\n");
 	}
-	fclose(fout);
+	fclose(fout);*/
 }
 
 void LargeVis::init_neg_table()
 {
 	long long x, p, i;
+	neg_size = 1e8;
     reverse.clear(); vector<long long> (reverse).swap(reverse);
 	real sum_weights = 0, dd, *weights = new real[n_vertices];
 	for (i = 0; i < n_vertices; ++i) weights[i] = 0;
@@ -587,9 +593,7 @@ void LargeVis::visualize_thread(int id)
 			printf("%cFitting model\tAlpha: %f Progress: %.3lf%%", 13, cur_alpha, (real)edge_count_actual / (real)(n_samples + 1) * 100);
 			fflush(stdout);
 		}
-		real uni1 = uni();
-		real uni2 = uni();		
-		p = sample_an_edge(uni1, uni2);
+		p = sample_an_edge(gsl_rng_uniform(gsl_r), gsl_rng_uniform(gsl_r));
 		x = edge_from[p];
 		y = edge_to[p];
 		lx = x * out_dim;
@@ -598,7 +602,7 @@ void LargeVis::visualize_thread(int id)
 		{
 			if (i > 0)
 			{
-				y = neg_table[(unsigned long long)floor(uni() * (neg_size - 0.1))];
+				y = neg_table[(unsigned long long)floor(gsl_rng_uniform(gsl_r) * (neg_size - 0.1))];
 				if (y == edge_to[p]) continue;
 			}
 			ly = y * out_dim;
@@ -625,22 +629,35 @@ void LargeVis::visualize_thread(int id)
 	delete[] err;
 }
 
+void *LargeVis::visualize_thread_caller(void *arg)
+{
+	LargeVis *ptr = (LargeVis*)(((arg_struct*)arg)->ptr);
+	ptr->visualize_thread(((arg_struct*)arg)->id);
+	pthread_exit(NULL);
+}
+
 void LargeVis::visualize()
 {
 	long long i;
 	vis = new real[n_vertices * out_dim];
-	for (i = 0; i < n_vertices * out_dim; ++i) vis[i] = (uni() - 0.5) / out_dim * 0.0001;
+	for (i = 0; i < n_vertices * out_dim; ++i) vis[i] = (gsl_rng_uniform(gsl_r) - 0.5) / out_dim * 0.0001;
 	init_neg_table();
 	init_alias_table();
-	boost::thread *pt = new boost::thread[n_threads];
-	for (int j = 0; j < n_threads; ++j) pt[j] = boost::thread(&LargeVis::visualize_thread, this, j);
-	for (int j = 0; j < n_threads; ++j) pt[j].join();
+	edge_count_actual = 0;
+	pthread_t *pt = new pthread_t[n_threads];
+	for (int j = 0; j < n_threads; ++j) pthread_create(&pt[j], NULL, LargeVis::visualize_thread_caller, new arg_struct(this, j));
+	for (int j = 0; j < n_threads; ++j) pthread_join(pt[j], NULL);
 	delete[] pt;
 	printf("\n");
 }
 
-void LargeVis::run(long long out_d, long long n_thre, long long n_samp, long long n_prop, real alph, long long n_tree, long long n_nega, long long n_neig, real gamm, real perp, long long to_log)
+void LargeVis::run(long long out_d, long long n_thre, long long n_samp, long long n_prop, real alph, long long n_tree, long long n_nega, long long n_neig, real gamm, real perp, long long to_log) //to_log added by sonja
 {
+	gsl_rng_env_setup();
+	gsl_T = gsl_rng_rand48;
+	gsl_r = gsl_rng_alloc(gsl_T);
+	gsl_rng_set(gsl_r, 314159265);
+
 	clean_model();
 	if (!vec && !head)
 	{
@@ -657,7 +674,7 @@ void LargeVis::run(long long out_d, long long n_thre, long long n_samp, long lon
 	n_propagations = n_prop < 0 ? 3 : n_prop;
 	gamma = gamm < 0 ? 7.0 : gamm;
 	perplexity = perp < 0 ? 50.0 : perp;
-	to_logarithmize = to_log < 0 ? 0 : to_log;
+	to_logarithmize = to_log < 0 ? 0 : to_log;//added by sonja
 	if (n_samples < 0)
 	{
 		if (n_vertices < 10000)
