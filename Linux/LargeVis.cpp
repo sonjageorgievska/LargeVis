@@ -106,7 +106,9 @@ void LargeVis::load_from_graph(char *infile)
 		edge_to.push_back(y);
 		if (to_logarithmize == 1) {//added by Sonja
 			weight = -log2(weight);//turning into a distance with logarithmization
-			maximalLogWeight = max(weight, maximalLogWeight);//computing the max for later normalization			
+			if (weight > maximalLogWeight){
+				maximalLogWeight = weight;//computing the max for later normalization			
+			}
 		}
 		edge_weight.push_back(weight);
 		next.push_back(-1);

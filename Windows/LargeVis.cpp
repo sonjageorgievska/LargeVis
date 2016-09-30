@@ -1,4 +1,6 @@
+#include "stdafx.h"
 #include "LargeVis.h"
+#include <math.h>
 #include <map>
 
 boost::minstd_rand LargeVis::generator(42u);
@@ -105,6 +107,7 @@ void LargeVis::load_from_graph(char *infile)
 		return;
 	}
 	printf("Reading input file %s ......%c", infile, 13);
+	real maximalLogWeight = 0;
 	while (fscanf(fin, "%s%s%f", w1, w2, &weight) == 3)
 	{
 		if (!dict.count(w1)) { dict[w1] = n_vertices++; names.push_back(w1); }
@@ -113,6 +116,10 @@ void LargeVis::load_from_graph(char *infile)
 		y = dict[w2];
 		edge_from.push_back(x);
 		edge_to.push_back(y);
+		if (to_logarithmize == 1) {//added by Sonja
+			weight = -log2(weight);//turning into a distance with logarithmization
+			maximalLogWeight = max(weight, maximalLogWeight);//computing the max for later normalization
+		}
 		edge_weight.push_back(weight);
 		next.push_back(-1);
 		++n_edge;
@@ -132,6 +139,9 @@ void LargeVis::load_from_graph(char *infile)
 		x = edge_from[p];
 		next[p] = head[x];
 		head[x] = p;
+		if (to_logarithmize == 1) {//added by Sonja
+			edge_weight[p] = 1 - edge_weight[p] / maximalLogWeight; //first normalizing to (0,1) and then turning distance back to similarity
+		}
 	}
 	printf("\nTotal vertices : %lld\tTotal edges : %lld\n", n_vertices, n_edge);
 }
@@ -251,9 +261,24 @@ void LargeVis::init_alias_table()
 
 long long LargeVis::sample_an_edge(real rand_value1, real rand_value2)
 {
-	long long k = (long long)((n_edge - 0.1) * rand_value1);
+	long long k = (long long)(n_edge * rand_value1) - 1;
+	k = max(k, 0);
 	return rand_value2 <= prob[k] ? k : alias[k];
 }
+
+//long long LargeVis::sample_an_edge(double rand_value1, double rand_value2) {
+//	real rv1 = rand_value1;
+//	real rv2 = rand_value2;
+//
+//	if (rv1 > rand_value1)
+//		rv1 = std::nextafter(rv1, -std::numeric_limits<real>::infinity());
+//
+//	if (rv2 > rand_value2)
+//		rv2 = std::nextafter(rv2, -std::numeric_limits<real>::infinity());
+//
+//	long long k = (long long)(n_edge * rv1);
+//	return rv2 < prob[k] ? k : alias[k];
+//}
 
 void LargeVis::annoy_thread(int id)
 {
@@ -562,7 +587,9 @@ void LargeVis::visualize_thread(int id)
 			printf("%cFitting model\tAlpha: %f Progress: %.3lf%%", 13, cur_alpha, (real)edge_count_actual / (real)(n_samples + 1) * 100);
 			fflush(stdout);
 		}
-		p = sample_an_edge(uni(), uni());
+		real uni1 = uni();
+		real uni2 = uni();		
+		p = sample_an_edge(uni1, uni2);
 		x = edge_from[p];
 		y = edge_to[p];
 		lx = x * out_dim;
@@ -612,7 +639,7 @@ void LargeVis::visualize()
 	printf("\n");
 }
 
-void LargeVis::run(long long out_d, long long n_thre, long long n_samp, long long n_prop, real alph, long long n_tree, long long n_nega, long long n_neig, real gamm, real perp)
+void LargeVis::run(long long out_d, long long n_thre, long long n_samp, long long n_prop, real alph, long long n_tree, long long n_nega, long long n_neig, real gamm, real perp, long long to_log)
 {
 	clean_model();
 	if (!vec && !head)
@@ -630,6 +657,7 @@ void LargeVis::run(long long out_d, long long n_thre, long long n_samp, long lon
 	n_propagations = n_prop < 0 ? 3 : n_prop;
 	gamma = gamm < 0 ? 7.0 : gamm;
 	perplexity = perp < 0 ? 50.0 : perp;
+	to_logarithmize = to_log < 0 ? 0 : to_log;
 	if (n_samples < 0)
 	{
 		if (n_vertices < 10000)
